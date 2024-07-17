@@ -30,10 +30,7 @@ import java.util.List;
 public class Main {
     private static final String PDF_FILE_PATH = "./files/FAQ1.pdf";
     private static final String PROMPT =
-            "8.1.4 What do you consider yourself?\n" +
-                    "( ) Data Controller\n" +
-                    "( ) Data Processor\n" +
-                    "( ) Neither";
+            "";
     private static final int NUM_HINTS = 2;
     private static final int MAX_CHUNK_SIZE = 500;
     private static final int MIN_CHUNK_SIZE = 100;
@@ -111,30 +108,10 @@ public class Main {
     }
     public static void main(String[] args) throws Exception {
         String[] prompts = new String[] {
-                "8.1.5 Where personal data is held do you have a policy/procedure in place to allow the release of this data\n" +
-                        "when requested? " +
-                        "( ) Yes\n" +
-                        "( ) No\n" +
-                        "( ) N/A",
-                "8.2.1 Do staff face disciplinary procedures if data protection policies are breached?\n" +
-                        "( ) Yes\n" +
-                        "( ) No",
-                "8.2.2 Do you have technical constraints on the system to:\n" +
-                        "Prevent copying data off system to USB memory? ( ) Yes\n" +
-                        "( ) No\n" +
-                        "Prevent copying data off system to personal email? ( ) Yes\n" +
-                        "( ) No\n" +
-                        "Restrict printing off systems? ( ) Yes\n" +
-                        "( ) No",
-                "8.2.3 Protection in the processing area\n" +
-                        "Restrictions on staff in processing area ( ) Yes\n" +
-                        "( ) No\n" +
-                        "No use of Smartphones? ( ) Yes\n" +
-                        "( ) No\n" +
-                        "No use of Cameras? ( ) Yes\n" +
-                        "( ) No\n" +
-                        "No use of flash devices? ( ) Yes\n" +
-                        "( ) No"
+                "",
+                "",
+                "",
+                ""
         };
         List<Info> infoList = new ArrayList<>();
         for (String prompt: prompts) {
