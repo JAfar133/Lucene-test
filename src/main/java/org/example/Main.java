@@ -7,7 +7,9 @@ import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
+import org.apache.lucene.queryparser.classic.QueryParserBase;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
@@ -26,11 +28,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Main {
-    private static final String PDF_FILE_PATH = "./files/Nietzsche.pdf";
-    private static final String PROMPT = "Who is over-man?";
-    private static final int NUM_HINTS = 3;
-    private static final int MAX_CHUNK_SIZE = 1000;
-    public static void main(String[] args) throws Exception {
+    private static final String PDF_FILE_PATH = "./files/FAQ1.pdf";
+    private static final String PROMPT =
+            "8.1.4 What do you consider yourself?\n" +
+                    "( ) Data Controller\n" +
+                    "( ) Data Processor\n" +
+                    "( ) Neither";
+    private static final int NUM_HINTS = 2;
+    private static final int MAX_CHUNK_SIZE = 500;
+    private static final int MIN_CHUNK_SIZE = 100;
+    public static Info processPrompt(String prompt) throws Exception {
         long ms = System.currentTimeMillis();
         // Initialize Lucene analyzer and index writer configuration
         StandardAnalyzer analyzer = new StandardAnalyzer();
@@ -51,12 +58,12 @@ public class Main {
         iwriter.close();
 
         System.out.println("Documents indexed");
-
+        String escapedPrompt = QueryParserBase.escape(prompt);
         // Search for the most relevant document
         DirectoryReader ireader = DirectoryReader.open(directory);
         IndexSearcher isearcher = new IndexSearcher(ireader);
         QueryParser parser = new QueryParser("content", analyzer);
-        Query query = parser.parse(PROMPT);
+        Query query = parser.parse(escapedPrompt);
         ScoreDoc[] hits = isearcher.search(query, NUM_HINTS).scoreDocs;
 
         StringBuilder data = new StringBuilder();
@@ -64,9 +71,12 @@ public class Main {
             Document hitDoc = isearcher.doc(hit.doc);
             data.append(hitDoc.get("content"));
         }
-        System.out.println("Search duration is: " + (System.currentTimeMillis() - ms) + "ms");
+
         // Generate a response using the retrieved document
-        JSONObject generateResponse = OllamaClient.generate("Using this data: " + data + ". Respond to this prompt: " + PROMPT, "mistral");
+        String request = "Using this data: " + data
+                + ". Respond to this prompt: " + prompt;
+
+        JSONObject generateResponse = OllamaClient.generate(request, "mistral");
         String response = generateResponse.getString("response");
 
         System.out.println("Generated response: " + response);
@@ -74,15 +84,64 @@ public class Main {
         // Close resources
         ireader.close();
         directory.close();
-
+        System.out.println("Duration is: " + (System.currentTimeMillis() - ms) + "ms");
         // Clean up temporary index directory
+
         try {
             Files.deleteIfExists(indexPath);
         } catch (IOException e) {
             e.printStackTrace();
         }
+        return new Info(prompt, request, response, (System.currentTimeMillis() - ms), data.toString());
+    }
+    static class Info {
+        public String prompt;
+        public String request;
+        public String response;
+        public double duration;
+        public String data;
 
-
+        public Info(String prompt, String request, String response, double duration, String data) {
+            this.prompt = prompt;
+            this.request = request;
+            this.response = response;
+            this.duration = duration;
+            this.data = data;
+        }
+    }
+    public static void main(String[] args) throws Exception {
+        String[] prompts = new String[] {
+                "8.1.5 Where personal data is held do you have a policy/procedure in place to allow the release of this data\n" +
+                        "when requested? " +
+                        "( ) Yes\n" +
+                        "( ) No\n" +
+                        "( ) N/A",
+                "8.2.1 Do staff face disciplinary procedures if data protection policies are breached?\n" +
+                        "( ) Yes\n" +
+                        "( ) No",
+                "8.2.2 Do you have technical constraints on the system to:\n" +
+                        "Prevent copying data off system to USB memory? ( ) Yes\n" +
+                        "( ) No\n" +
+                        "Prevent copying data off system to personal email? ( ) Yes\n" +
+                        "( ) No\n" +
+                        "Restrict printing off systems? ( ) Yes\n" +
+                        "( ) No",
+                "8.2.3 Protection in the processing area\n" +
+                        "Restrictions on staff in processing area ( ) Yes\n" +
+                        "( ) No\n" +
+                        "No use of Smartphones? ( ) Yes\n" +
+                        "( ) No\n" +
+                        "No use of Cameras? ( ) Yes\n" +
+                        "( ) No\n" +
+                        "No use of flash devices? ( ) Yes\n" +
+                        "( ) No"
+        };
+        List<Info> infoList = new ArrayList<>();
+        for (String prompt: prompts) {
+            Info info = processPrompt(prompt);
+            infoList.add(info);
+        }
+        System.out.println(infoList);
     }
 
     private static List<String> loadPdfData(String filePath) throws IOException {
@@ -90,21 +149,33 @@ public class Main {
         PDFTextStripper stripper = new PDFTextStripper();
         String text = stripper.getText(document);
         document.close();
-        return splitIntoParagraphs(text, MAX_CHUNK_SIZE);
+        return splitIntoParagraphs(text, MAX_CHUNK_SIZE, MIN_CHUNK_SIZE);
     }
 
-    private static List<String> splitIntoParagraphs(String text, int maxChunkSize) {
+    private static List<String> splitIntoParagraphs(String text, int maxChunkSize, int minChunkSize) {
         String[] paragraphsArray = text.split("\\r?\\n\\r?\\n");
         List<String> paragraphs = new ArrayList<>();
+        StringBuilder currentChunk = new StringBuilder();
+
         for (String paragraph : paragraphsArray) {
             if (!paragraph.trim().isEmpty()) {
-                if (paragraph.length() <= maxChunkSize) {
-                    paragraphs.add(paragraph.trim());
-                } else {
-                    paragraphs.addAll(splitIntoChunks(paragraph.trim(), maxChunkSize));
-                }
+
+                    if (currentChunk.length() >= minChunkSize) {
+                        paragraphs.add(currentChunk.toString());
+                        currentChunk.setLength(0);
+                        currentChunk.append(paragraph.trim());
+                    } else {
+                        currentChunk.append("\n\n").append(paragraph.trim());
+                        paragraphs.addAll(splitIntoChunks(currentChunk.toString(), maxChunkSize, 60));
+                        currentChunk.setLength(0);
+                    }
             }
         }
+
+        if (!currentChunk.isEmpty()) {
+            paragraphs.add(currentChunk.toString());
+        }
+
         return paragraphs;
     }
 
@@ -112,6 +183,16 @@ public class Main {
         List<String> chunks = new ArrayList<>();
         int length = text.length();
         for (int start = 0; start < length; start += chunkSize) {
+            int end = Math.min(length, start + chunkSize);
+            chunks.add(text.substring(start, end));
+        }
+        return chunks;
+    }
+
+    private static List<String> splitIntoChunks(String text, int chunkSize, int chunkOverlap) {
+        List<String> chunks = new ArrayList<>();
+        int length = text.length();
+        for (int start = 0; start < length; start += chunkSize - chunkOverlap) {
             int end = Math.min(length, start + chunkSize);
             chunks.add(text.substring(start, end));
         }
