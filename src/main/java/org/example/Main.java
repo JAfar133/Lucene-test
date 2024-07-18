@@ -1,178 +1,122 @@
 package org.example;
 
-import org.apache.lucene.analysis.standard.StandardAnalyzer;
-import org.apache.lucene.document.Document;
-import org.apache.lucene.document.Field;
-import org.apache.lucene.document.TextField;
-import org.apache.lucene.index.DirectoryReader;
-import org.apache.lucene.index.IndexWriter;
-import org.apache.lucene.index.IndexWriterConfig;
-import org.apache.lucene.queryparser.classic.ParseException;
-import org.apache.lucene.queryparser.classic.QueryParser;
 import org.apache.lucene.queryparser.classic.QueryParserBase;
-import org.apache.lucene.search.IndexSearcher;
-import org.apache.lucene.search.Query;
-import org.apache.lucene.search.ScoreDoc;
-import org.apache.lucene.store.Directory;
-import org.apache.lucene.store.FSDirectory;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
 public class Main {
-    private static final String PDF_FILE_PATH = "./files/FAQ1.pdf";
-    private static final String PROMPT =
-            "";
-    private static final int NUM_HINTS = 2;
-    private static final int MAX_CHUNK_SIZE = 500;
-    private static final int MIN_CHUNK_SIZE = 100;
-    public static Info processPrompt(String prompt) throws Exception {
-        long ms = System.currentTimeMillis();
-        // Initialize Lucene analyzer and index writer configuration
-        StandardAnalyzer analyzer = new StandardAnalyzer();
-        Path indexPath = Files.createTempDirectory("tempIndex");
-        Directory directory = FSDirectory.open(indexPath);
-        IndexWriterConfig config = new IndexWriterConfig(analyzer);
-        IndexWriter iwriter = new IndexWriter(directory, config);
-
-        // Read text from PDF file
-        List<String> chunks = loadPdfData(PDF_FILE_PATH);
-
-        // Create a document for each chunk and add it to the index
-        for (String chunk : chunks) {
-            Document doc = new Document();
-            doc.add(new TextField("content", chunk, Field.Store.YES));
-            iwriter.addDocument(doc);
-        }
-        iwriter.close();
-
-        System.out.println("Documents indexed");
-        String escapedPrompt = QueryParserBase.escape(prompt);
-        // Search for the most relevant document
-        DirectoryReader ireader = DirectoryReader.open(directory);
-        IndexSearcher isearcher = new IndexSearcher(ireader);
-        QueryParser parser = new QueryParser("content", analyzer);
-        Query query = parser.parse(escapedPrompt);
-        ScoreDoc[] hits = isearcher.search(query, NUM_HINTS).scoreDocs;
-
-        StringBuilder data = new StringBuilder();
-        for (ScoreDoc hit : hits) {
-            Document hitDoc = isearcher.doc(hit.doc);
-            data.append(hitDoc.get("content"));
-        }
-
-        // Generate a response using the retrieved document
-        String request = "Using this data: " + data
-                + ". Respond to this prompt: " + prompt;
-
-        JSONObject generateResponse = OllamaClient.generate(request, "mistral");
-        String response = generateResponse.getString("response");
-
-        System.out.println("Generated response: " + response);
-
-        // Close resources
-        ireader.close();
-        directory.close();
-        System.out.println("Duration is: " + (System.currentTimeMillis() - ms) + "ms");
-        // Clean up temporary index directory
-
-        try {
-            Files.deleteIfExists(indexPath);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        return new Info(prompt, request, response, (System.currentTimeMillis() - ms), data.toString());
-    }
-    static class Info {
-        public String prompt;
-        public String request;
-        public String response;
-        public double duration;
-        public String data;
-
-        public Info(String prompt, String request, String response, double duration, String data) {
-            this.prompt = prompt;
-            this.request = request;
-            this.response = response;
-            this.duration = duration;
-            this.data = data;
-        }
-    }
     public static void main(String[] args) throws Exception {
-        String[] prompts = new String[] {
-                "",
-                "",
-                "",
-                ""
-        };
-        List<Info> infoList = new ArrayList<>();
-        for (String prompt: prompts) {
-            Info info = processPrompt(prompt);
+
+        List<QuestionInfo> infoList = new ArrayList<>();
+        List<String> prompts = loadPrompts(Config.PROMPTS_FILE_PATH);
+        for (String prompt : prompts) {
+            QuestionInfo info = processPrompt(prompt);
             infoList.add(info);
         }
-        System.out.println(infoList);
+        String date = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm"));
+        saveResultsToJson(infoList, String.format(Config.JSON_RESULT_FILE_PATH_FORMAT, date));
+        saveResultsToXlsx(infoList, String.format(Config.XLSX_RESULT_FILE_PATH_FORMAT, date));
     }
 
-    private static List<String> loadPdfData(String filePath) throws IOException {
-        PDDocument document = Loader.loadPDF(new File(filePath));
-        PDFTextStripper stripper = new PDFTextStripper();
-        String text = stripper.getText(document);
-        document.close();
-        return splitIntoParagraphs(text, MAX_CHUNK_SIZE, MIN_CHUNK_SIZE);
-    }
-
-    private static List<String> splitIntoParagraphs(String text, int maxChunkSize, int minChunkSize) {
-        String[] paragraphsArray = text.split("\\r?\\n\\r?\\n");
-        List<String> paragraphs = new ArrayList<>();
-        StringBuilder currentChunk = new StringBuilder();
-
-        for (String paragraph : paragraphsArray) {
-            if (!paragraph.trim().isEmpty()) {
-
-                    if (currentChunk.length() >= minChunkSize) {
-                        paragraphs.add(currentChunk.toString());
-                        currentChunk.setLength(0);
-                        currentChunk.append(paragraph.trim());
-                    } else {
-                        currentChunk.append("\n\n").append(paragraph.trim());
-                        paragraphs.addAll(splitIntoChunks(currentChunk.toString(), maxChunkSize, 60));
-                        currentChunk.setLength(0);
-                    }
+    public static List<String> loadPrompts(String filePath) throws IOException {
+        Path path = Paths.get(filePath);
+        String content = Files.readString(path);
+        String[] promptsArray = content.split("\\r?\\n\\r?\\n");
+        System.out.println(promptsArray.length + " prompts found");
+        List<String> prompts = new ArrayList<>();
+        for (String prompt : promptsArray) {
+            if (!prompt.trim().isEmpty()) {
+                prompts.add(prompt.trim());
             }
         }
-
-        if (!currentChunk.isEmpty()) {
-            paragraphs.add(currentChunk.toString());
-        }
-
-        return paragraphs;
+        return prompts;
     }
 
-    private static List<String> splitIntoChunks(String text, int chunkSize) {
-        List<String> chunks = new ArrayList<>();
-        int length = text.length();
-        for (int start = 0; start < length; start += chunkSize) {
-            int end = Math.min(length, start + chunkSize);
-            chunks.add(text.substring(start, end));
-        }
-        return chunks;
+    public static QuestionInfo processPrompt(String prompt) throws Exception {
+        long startTime = System.currentTimeMillis();
+        LuceneIndexer indexer = new LuceneIndexer();
+        List<String> chunks = PdfHelper.loadPdfData(Config.PDF_FILE_PATH);
+
+        indexer.indexDocuments(chunks);
+        String escapedPrompt = QueryParserBase.escape(prompt);
+
+        String data = indexer.search(escapedPrompt, Config.NUM_HINTS);
+        String request = String.format(Config.REQUEST_FORMAT, data, prompt);
+
+        JSONObject generateResponse = OllamaClient.generate(request, Config.OLLAMA_MODEL);
+        String response = generateResponse.getString("response");
+
+        long duration = System.currentTimeMillis() - startTime;
+
+        return new QuestionInfo(prompt, request, response, duration, data);
     }
 
-    private static List<String> splitIntoChunks(String text, int chunkSize, int chunkOverlap) {
-        List<String> chunks = new ArrayList<>();
-        int length = text.length();
-        for (int start = 0; start < length; start += chunkSize - chunkOverlap) {
-            int end = Math.min(length, start + chunkSize);
-            chunks.add(text.substring(start, end));
+    public static void saveResultsToJson(List<QuestionInfo> infoList, String filePath) throws IOException {
+        JSONArray jsonArray = new JSONArray();
+        for (QuestionInfo info : infoList) {
+            JSONObject jsonObject = new JSONObject();
+            jsonObject.put("prompt", info.getPrompt());
+            jsonObject.put("request", info.getRequest());
+            jsonObject.put("response", info.getResponse());
+            jsonObject.put("duration", info.getDuration());
+            jsonObject.put("data", info.getData());
+            jsonArray.put(jsonObject);
         }
-        return chunks;
+
+        try (FileWriter file = new FileWriter(filePath)) {
+            file.write(jsonArray.toString(4));
+            file.flush();
+        }
+    }
+    public static void saveResultsToXlsx(List<QuestionInfo> infoList, String filePath) throws IOException {
+        Workbook workbook = new XSSFWorkbook();
+        Sheet sheet = workbook.createSheet("Results");
+
+        Row headerRow = sheet.createRow(0);
+        String[] columns = {"№", "Prompt", "Duration", "Response", "Request", "Data", "Hardware", "Config"};
+        for (int i = 0; i < columns.length; i++) {
+            Cell cell = headerRow.createCell(i);
+            cell.setCellValue(columns[i]);
+        }
+
+        int rowNum = 1;
+        for (QuestionInfo info : infoList) {
+            Row row = sheet.createRow(rowNum++);
+            row.createCell(0).setCellValue(rowNum-1);
+            row.createCell(1).setCellValue(info.getPrompt());
+            row.createCell(2).setCellValue(info.getResponse());
+            row.createCell(3).setCellValue(String.format("%f.2s", (double) info.getDuration() / 1000));
+            row.createCell(4).setCellValue(info.getRequest());
+            row.createCell(5).setCellValue(info.getData());
+            row.createCell(6).setCellValue("Intel(R) Core(TM) i5-9400:\n" +
+                    "    Speed: 2.90GHz \n" +
+                    "    Cores: 6\n" +
+                    "    Logical processors: 6\n" +
+                    "RAM:\n" +
+                    "    Size: 16GB\n" +
+                    "    Usage: 15.9GB");
+            row.createCell(7).setCellValue(String.format("max chunk size: %d\nmin chunk size: %d\nnum hints: %d",Config.MAX_CHUNK_SIZE, Config.MIN_CHUNK_SIZE, Config.NUM_HINTS));
+        }
+
+        try (FileOutputStream fileOut = new FileOutputStream(filePath)) {
+            workbook.write(fileOut);
+        }
+        workbook.close();
     }
 }
